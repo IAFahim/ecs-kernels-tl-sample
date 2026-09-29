@@ -1,0 +1,13 @@
+{
+  "name": "walk",
+  "duration": 12,
+  "loop": true,
+  "tracks": [
+    { "namespace": "Walk", "type": "WalkTrack", "data": { "Scale": 2.0 },
+      "clips": [
+        { "namespace": "Walk", "type": "WalkClip", "start": 0, "end": 4, "data": { "Speed": 0.5 } },
+        { "namespace": "Walk", "type": "WalkClip", "start": 4, "end": 8, "data": { "Speed": 1.5 } },
+        { "namespace": "Walk", "type": "WalkClip", "start": 8, "end": 12, "data": { "Speed": 3.0 } }
+      ] }
+  ]
+}
