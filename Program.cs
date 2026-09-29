@@ -19,14 +19,13 @@ namespace Walk
             var positions = new PositionX[Entities];
             for (var i = 0; i < Entities; i++)
             {
-                ids[i] = walk;                          // plays 'walk'
-                clocks[i] = (ushort)(i * 37 % 96);      // staggered start
+                ids[i] = walk;                      // plays 'walk'
+                clocks[i] = (ushort)(i * 37 % 96);  // staggered start
             }
 
             for (var tick = 0; tick < Ticks; tick++)
             {
-                WalkTrackTimeline.ExecuteWalkChunk(ids, clocks, speeds);  // tl folds, clocks advance
-                WalkTrack.ExecuteStepChunk(speeds, positions, 0.25f);     // your math, SIMD lanes
+                WalkTrackTimeline.ExecuteWalkChunk(ids, clocks, speeds, positions);
             }
 
             Console.WriteLine($"walker 0 walked to x = {positions[0].Value}");
