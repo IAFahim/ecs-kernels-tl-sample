@@ -1,14 +1,13 @@
-# ecs-kernels × tl — the whole sample in one file
+# ecs-kernels × tl — six things and a player
 
 256 walkers play one baked [tl](https://github.com/IAFahim/tl) timeline; a kernel moves
-them. You write plain scalar C#; a source generator turns it into SIMD lanes and wires
-tl's fold around them — the same code runs ~29x faster than the naive per-entity loop
-at 100k entities, bit-deterministically.
+them. [Walk.cs](Walk.cs) is everything you write — the six things; [Program.cs](Program.cs)
+is the ten-line player. A source generator turns your one-line kernel into SIMD lanes and
+wires tl's fold around it, bit-deterministically.
 
 ```bash
 dotnet run
-# walked 256 walkers for 64 ticks — walker 0 is now at x = 1627.5
-# receipt ok: position sum bits 0x476ec500 (same on every run, every machine)
+# walker 0 walked to x = 1627.5
 ```
 
 The repo is self-contained: `libs/` vendors the [ecs-kernels](https://github.com/IAFahim/ecs-kernels)
@@ -17,7 +16,7 @@ generator and runtime, plus the 20-line tl bridge. The only external dependencie
 
 ## What you write — all of it
 
-`Program.cs` is the entire sample:
+`Walk.cs`, numbered 1 to 6 (plus `walk.json`):
 
 1. **tl's side** — a clip, a blending track, and a consumer that folds into the float lane:
 
@@ -58,11 +57,11 @@ in that order, identically on .NET and Unity. Timeline state never crosses the k
 boundary — only the effect component does — so there is no clock to reason about inside
 the kernel, 
 
-## The receipt
+## Determinism
 
-The run is a pure function of `(walk.tlb, entity seeds)`, so the exact bits of the final
-position sum are pinned in `Program.cs`. `Main` returns 1 if they ever move — any drift in
-the generator, tl, or the baked asset fails the run itself.
+The run is a pure function of `(walk.tlb, entity seeds)`: same bits on every machine. The
+main repo's test suite pins this exact scenario (256 walkers, 64 ticks) — receipt
+`0x476ec500` — and fails on any drift in the generator, tl, or the bake.
 
 ## Re-baking the timeline
 
@@ -81,7 +80,8 @@ build, and the receipt constant in `Program.cs` will need re-pinning if the curv
 ## Layout
 
 ```
-Program.cs                    the whole sample: domain, kernel, loop, receipt
+Walk.cs                       the six things you write (the whole game side)
+Program.cs                    the player: load, park walkers, play, print
 walk.json / walk.tlb          authored timeline + its bake (committed)
 libs/generator/               the ecs-kernels source generator (vendored)
 libs/runtime/                 Kernels runtime: exact accumulators, KernelMath (vendored)

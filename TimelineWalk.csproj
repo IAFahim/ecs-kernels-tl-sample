@@ -10,6 +10,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="Walk.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="libs/TimelineColumn.cs" LinkBase="Bridge" />
     <None Include="walk.tlb" CopyToOutputDirectory="PreserveNewest" />
