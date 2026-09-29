@@ -1,13 +1,14 @@
 # ecs-kernels × tl — the whole sample in one file
 
-100,000 walkers play one baked [tl](https://github.com/IAFahim/tl) timeline; a kernel moves
-them; **1 billion entity-ticks per second**, bit-deterministic. You write plain scalar C#;
-a source generator turns it into SIMD lanes and wires tl's fold around them.
+256 walkers play one baked [tl](https://github.com/IAFahim/tl) timeline; a kernel moves
+them. You write plain scalar C#; a source generator turns it into SIMD lanes and wires
+tl's fold around them — the same code runs ~29x faster than the naive per-entity loop
+at 100k entities, bit-deterministically.
 
 ```bash
-dotnet run -c Release
-# 100,000 walkers x 512 ticks in 47 ms (93 us/tick, 1,078,094,468 entity-ticks/s)
-# receipt ok: position sum bits 0x4eed9862 (deterministic — every run, every machine)
+dotnet run
+# walked 256 walkers for 64 ticks — walker 0 is now at x = 1627.5
+# receipt ok: position sum bits 0x476ec500 (same on every run, every machine)
 ```
 
 The repo is self-contained: `libs/` vendors the [ecs-kernels](https://github.com/IAFahim/ecs-kernels)
@@ -55,8 +56,7 @@ That's it. The generator discovers `TickWalk` by convention and emits
 
 in that order, identically on .NET and Unity. Timeline state never crosses the kernel
 boundary — only the effect component does — so there is no clock to reason about inside
-the kernel, and the naive per-entity equivalent (tl once per entity plus a scalar loop)
-measures ~29× slower at this entity count.
+the kernel, 
 
 ## The receipt
 

@@ -2,7 +2,6 @@
 // Everything else — SIMD lanes, the tl fold, the clock advance — is generated.
 
 using System;
-using System.Diagnostics;
 using System.IO;
 using Kernels.Timelines;
 using Tl;
@@ -50,10 +49,10 @@ namespace Walk   // tl bakes bare namespaces only — no dots
 
     public static class Program
     {
-        private const int Entities = 100_000;
-        private const int Ticks = 512;
+        private const int Entities = 256;
+        private const int Ticks = 64;
         private const float Dt = 0.25f;
-        private const int Receipt = unchecked((int)0x4EED9862);
+        private const int Receipt = 0x476EC500;
 
         public static int Main()
         {
@@ -71,13 +70,11 @@ namespace Walk   // tl bakes bare namespaces only — no dots
             }
 
             var walker = new Walker();
-            var watch = Stopwatch.StartNew();
             for (var tick = 0; tick < Ticks; tick++)
             {
                 walker.TickWalkChunk(timelines, clocks, speeds, positions, Dt);
             }
 
-            watch.Stop();
             var sum = 0f;
             for (var i = 0; i < Entities; i++)
             {
@@ -85,10 +82,9 @@ namespace Walk   // tl bakes bare namespaces only — no dots
             }
 
             var bits = BitConverter.SingleToInt32Bits(sum);
-            Console.WriteLine($"{Entities:N0} walkers x {Ticks} ticks in {watch.Elapsed.TotalMilliseconds:F0} ms"
-                + $" ({watch.Elapsed.TotalMicroseconds / Ticks:F0} us/tick,{Entities * (long)Ticks / watch.Elapsed.TotalSeconds:N0} entity-ticks/s)");
+            Console.WriteLine($"walked {Entities} walkers for {Ticks} ticks — walker 0 is now at x = {positions[0].Value}");
             Console.WriteLine(bits == Receipt
-                ? $"receipt ok: position sum bits 0x{bits:x8} (deterministic — every run, every machine)"
+                ? $"receipt ok: position sum bits 0x{bits:x8} (same on every run, every machine)"
                 : $"receipt MOVED: 0x{bits:x8} != 0x{Receipt:x8}");
             return bits == Receipt ? 0 : 1;
         }
