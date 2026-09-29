@@ -41,6 +41,21 @@ internal static class DotNetBackend
             }
 
             writer.Close();
+            var timelines = family.TimelineKernels.Where(kernel => kernel.CanEmit).ToList();
+            if (timelines.Count > 0)
+            {
+                writer.Line();
+                writer.Open($"{(family.IsPublic ? "public" : "internal")} static unsafe partial class {timelines[0].PairClass}");
+                foreach (var kernel in timelines)
+                {
+                    TimelineBackend.WriteSpanFacade(writer, family, kernel);
+                    writer.Line();
+                    TimelineBackend.WriteArrayFacade(writer, family, kernel);
+                    writer.Line();
+                }
+
+                writer.Close();
+            }
         });
 
     private static void WriteChunk(SourceWriter writer, KernelModel kernel, Backends backends)
@@ -66,29 +81,14 @@ internal static class DotNetBackend
             kernel,
             column => $"{SpanType(kernel, column)} {names.Column(column)}",
             accumulator => $"ref {kernel.Accumulators[accumulator].TypeName} {names.Accumulator(accumulator)}",
-            uniform => UniformParameter(kernel, names, uniform),
-            timeline => new[]
-            {
-                $"global::System.Span<global::Kernels.Timelines.TimelineRef> {names.Timeline(timeline).Reference}",
-                $"global::System.Span<global::Kernels.Timelines.TimelineTick> {names.Timeline(timeline).Clock}",
-            });
-        writer.Open($"public void {kernel.Chunk}({string.Join(", ", parameters)})");
+            uniform => UniformParameter(kernel, names, uniform));
+        writer.Open($"public {(kernel.IsStatic ? "static " : string.Empty)}void {kernel.Chunk}({string.Join(", ", parameters)})");
         foreach (var index in Enumerable.Range(1, kernel.Columns.Count - 1))
         {
             var name = names.Column(index);
             writer.Open($"if ({name}.Length != {first}.Length)");
             writer.Line($"throw new global::System.ArgumentException(\"Column '{names.Columns[index]}' must have as many elements as column '{names.Columns[0]}'.\", nameof({name}));");
             writer.Close();
-            writer.Line();
-        }
-
-        foreach (var timeline in Enumerable.Range(0, kernel.Timelines.Count))
-        {
-            writer.Line(SpanApply(kernel, names, timeline));
-        }
-
-        if (kernel.Timelines.Count > 0)
-        {
             writer.Line();
         }
 
@@ -116,32 +116,12 @@ internal static class DotNetBackend
 
         var executeArguments = ParameterNames.InExecuteOrder(
             kernel,
-            column => TimelineArgument(kernel, names, column) is { } wrapped
-                ? wrapped
-                : $"{(kernel.Columns[column].Access == Access.ReadWrite ? "ref" : "in")} {names.Column(column)}[index]",
+            column => $"{(kernel.Columns[column].Access == Access.ReadWrite ? "ref" : "in")} {names.Column(column)}[index]",
             accumulator => "ref " + names.Accumulator(accumulator),
             uniform => "in " + names.Uniform(uniform));
         writer.Line($"{kernel.Method}({string.Join(", ", executeArguments)});");
         writer.Close();
-        foreach (var timeline in Enumerable.Range(0, kernel.Timelines.Count))
-        {
-            writer.Line(SpanAdvance(kernel, names, timeline));
-        }
-
         writer.Close();
-    }
-
-    private static string SpanApply(KernelModel kernel, ParameterNames names, int timeline) =>
-        $"global::Tl.Timeline<{kernel.Timelines[timeline].Pair}>.Apply<{kernel.Timelines[timeline].RuntimeTypes}>(" +
-        $"{names.Timeline(timeline).Reference}, {names.Timeline(timeline).Clock}, true, {names.Column(kernel.Timelines[timeline].EffectColumn)});";
-
-    private static string SpanAdvance(KernelModel kernel, ParameterNames names, int timeline) =>
-        $"global::Tl.Timeline<{kernel.Timelines[timeline].Pair}>.Advance<{kernel.Timelines[timeline].ClockTypes}>({names.Timeline(timeline).Reference}, {names.Timeline(timeline).Clock}, true);";
-
-    private static string? TimelineArgument(KernelModel kernel, ParameterNames names, int column)
-    {
-        var timeline = kernel.Timelines.FirstOrDefault(candidate => candidate.EffectColumn == column);
-        return timeline is null ? null : $"new global::Kernels.Timelines.TimelineColumn<{timeline.Consumer}, {timeline.Effect}>(in {names.Column(column)}[index])";
     }
 
     private static void WriteArrayFacade(SourceWriter writer, KernelModel kernel, ParameterNames names)
@@ -150,19 +130,13 @@ internal static class DotNetBackend
             kernel,
             column => $"{kernel.Columns[column].Component.FullName}[] {names.Column(column)}",
             accumulator => $"ref {kernel.Accumulators[accumulator].TypeName} {names.Accumulator(accumulator)}",
-            uniform => UniformParameter(kernel, names, uniform),
-            timeline => new[]
-            {
-                $"global::Kernels.Timelines.TimelineRef[] {names.Timeline(timeline).Reference}",
-                $"global::Kernels.Timelines.TimelineTick[] {names.Timeline(timeline).Clock}",
-            });
+            uniform => UniformParameter(kernel, names, uniform));
         var arguments = ParameterNames.InExecuteOrder(
             kernel,
             column => ArrayArgument(kernel.Columns[column], names.Column(column)),
             accumulator => "ref " + names.Accumulator(accumulator),
-            uniform => "in " + names.Uniform(uniform),
-            timeline => new[] { names.Timeline(timeline).Reference, names.Timeline(timeline).Clock });
-        writer.Open($"public void {kernel.Chunk}({string.Join(", ", parameters)})");
+            uniform => "in " + names.Uniform(uniform));
+        writer.Open($"public {(kernel.IsStatic ? "static " : string.Empty)}void {kernel.Chunk}({string.Join(", ", parameters)})");
         writer.Line($"{kernel.Chunk}({string.Join(", ", arguments)});");
         writer.Close();
     }
@@ -174,7 +148,7 @@ internal static class DotNetBackend
             .Concat(program.ReducedAccumulators.Select(accumulator => $"ref {kernel.Accumulators[accumulator].TypeName} {names.Accumulator(accumulator)}"))
             .Concat(Enumerable.Range(0, kernel.Uniforms.Count).Select(uniform => UniformParameter(kernel, names, uniform)))
             .Append("int vectorCount");
-        writer.Open($"private void {kernel.Vectors}({string.Join(", ", parameters)})");
+        writer.Open($"private {(kernel.IsStatic ? "static " : string.Empty)}void {kernel.Vectors}({string.Join(", ", parameters)})");
         if (program.HasIntegers)
         {
             writer.Open("unchecked");
@@ -251,14 +225,10 @@ internal static class DotNetBackend
         $"in {kernel.Uniforms[uniform].TypeName} {names.Uniform(uniform)}";
 
     private static string ArrayArgument(Column column, string name) =>
-        (column.Access == Access.ReadWrite || column.IsTimelineEffect ? "new global::System.Span<" : "new global::System.ReadOnlySpan<") + column.Component.FullName + ">(" + name + ")";
+        (column.Access == Access.ReadWrite ? "new global::System.Span<" : "new global::System.ReadOnlySpan<") + column.Component.FullName + ">(" + name + ")";
 
-    // tl's Apply writes the effect column, so a timeline effect is the one read-only column
-    // that still enters the facade as a writable span.
     private static string SpanType(KernelModel kernel, int column) =>
-        kernel.Columns[column].IsTimelineEffect
-            ? "global::System.Span<" + kernel.Columns[column].Component.FullName + ">"
-            : (kernel.Columns[column].Access == Access.ReadWrite ? "global::System.Span<" : "global::System.ReadOnlySpan<") + kernel.Columns[column].Component.FullName + ">";
+        (kernel.Columns[column].Access == Access.ReadWrite ? "global::System.Span<" : "global::System.ReadOnlySpan<") + kernel.Columns[column].Component.FullName + ">";
 
     private static string Lanes(Column column) => $"global::System.Numerics.Vector<{column.Component.Leaves[0].LaneElement}>";
 

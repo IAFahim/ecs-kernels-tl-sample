@@ -43,30 +43,53 @@ internal sealed record Component(
 
 internal sealed record Column(string Name, Access Access, Component Component, int Ordinal, bool IsTimelineEffect = false);
 
-internal sealed record TimelineColumn(
+// One live column of a timeline-driven kernel, in Execute order after the Frame: tl binds
+// columns by TypeKey, so two columns that share a mode and a type each get a synthesized
+// one-field wrapper (a distinct type key over the same storage).
+internal sealed record TimelineLane(string Name, string TypeName, bool IsReference, string? Wrapper)
+{
+    public bool IsWrapped => Wrapper is not null;
+
+    // The tl-facing consumer and the binding see the wrapper; the facades take the storage.
+    public string ColumnType => IsWrapped ? Wrapper! : TypeName;
+}
+
+internal sealed record TimelineWrapper(string Name, string Storage, int Lane);
+
+// A Frame-first Execute<Suffix> method: tl dispatches it per entity per tick through the
+// generated tl-facing consumer; the generator emits no lane body for it.
+internal sealed record TimelineKernel(
+    string Namespace,
     string Name,
-    int Ordinal,
-    string Consumer,
+    string FullName,
+    bool IsPublic,
+    bool IsReadOnly,
+    string MethodName,
     string Track,
     string Clip,
     string TrackName,
     string ClipName,
-    string Effect,
-    string EffectName,
-    int EffectColumn,
-    Component EffectComponent,
-    Component Ref,
-    Component Tick)
+    EquatableArray<TimelineLane> Lanes,
+    EquatableArray<TimelineWrapper> Wrappers,
+    EquatableArray<DiagnosticInfo> Diagnostics,
+    SourceLocation? Location)
 {
+    public string Method => MethodName;
+
+    public string Chunk => Method + "Chunk";
+
+    public string EnabledChunk => Method + "EnabledChunk";
+
+    // tl 1.3.0's Timeline<,> is not partial, so the facades and the consumer binding live on
+    // a generated pair-named static class; when tl ships the partial keyword (tl #393) the
+    // hosting moves onto Timeline<Track, Clip> itself.
+    public string PairClass => TrackName + "Timeline";
+
+    public string ConsumerMethod => "OnActive";
+
     public string Pair => Track + ", " + Clip;
 
-    // tl's generic Apply/Advance overloads take TIndex/TPosition/TEffect wrappers, and C#
-    // cannot infer them from a Span<TimelineRef> argument (inference never crosses the
-    // Span<T> -> ReadOnlySpan<T> conversion; newer compilers silently bind the unrelated
-    // 'in TIndex' overloads instead). Every emitted call names the type arguments.
-    public string RuntimeTypes => Ref.FullName + ", " + Tick.FullName + ", " + Effect;
-
-    public string ClockTypes => Ref.FullName + ", " + Tick.FullName;
+    public bool CanEmit => Diagnostics.Count == 0 && Track.Length > 0;
 }
 
 internal sealed record UniformParameter(string Name, string TypeName, ScalarType? Lane, string? EnumType, int Ordinal)
@@ -137,10 +160,10 @@ internal sealed record KernelModel(
     EquatableArray<UniformParameter> Uniforms,
     EquatableArray<Column> Columns,
     EquatableArray<Accumulator> Accumulators,
-    EquatableArray<TimelineColumn> Timelines,
     Body Body,
     EquatableArray<DiagnosticInfo> Diagnostics,
     bool CanEmit,
+    bool IsStatic,
     SourceLocation? Location)
 {
     public string Method => MethodName;
@@ -161,8 +184,9 @@ internal sealed record FamilyModel(
     bool IsPublic,
     bool IsReadOnly,
     EquatableArray<KernelModel> Kernels,
+    EquatableArray<TimelineKernel> TimelineKernels,
     EquatableArray<DiagnosticInfo> Diagnostics,
     SourceLocation? Location)
 {
-    public bool CanEmit => Kernels.Any(kernel => kernel.CanEmit);
+    public bool CanEmit => Kernels.Any(kernel => kernel.CanEmit) || TimelineKernels.Any();
 }

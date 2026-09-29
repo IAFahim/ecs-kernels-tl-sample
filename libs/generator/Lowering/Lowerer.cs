@@ -352,11 +352,12 @@ internal static class Lowerer
             ? chain with { Path = chain.Path + "." + field.Field.Name }
             : new FieldChain(field.Instance, field.Field, field.Field.Name);
 
-    // A timeline parameter is lowered as its effect column: the marker's single 'Effect'
-    // field is the bridge into the effect's leaves (walk.Effect.Speed loads leaf 'Speed').
+    // A timeline parameter is lowered as its effect column: the marker's 'Value' member is
+    // the folded float, which is the effect component's single lane (walk.Value loads it,
+    // whatever that lane's field is called on the component).
     private static string TimelinePath(Frame frame, int column, string path) =>
-        frame.Shape.Column(column).IsTimelineEffect && path.StartsWith("Effect.", StringComparison.Ordinal)
-            ? path.Substring("Effect.".Length)
+        frame.Shape.Column(column).IsTimelineEffect && path == "Value"
+            ? frame.Shape.Column(column).Component.Leaves[0].Path
             : path;
 
     private static Outcome<Valued> ValueOf(IOperation operation, LaneState state, Frame frame) => operation switch

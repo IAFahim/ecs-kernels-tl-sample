@@ -95,18 +95,18 @@ internal static class Diagnostics
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
-    public static readonly DiagnosticDescriptor NotATimelineConsumer = new(
+    public static readonly DiagnosticDescriptor NotATimelineTrack = new(
         "KRN011",
-        "Timeline consumer is not a tl track consumer",
-        "Kernel '{0}' declares '{1}' as in TimelineColumn<{2}, …>, but '{2}' is not a user-source struct implementing Tl.ITrack<TTrack, TClip>",
+        "The family is not the Frame's tl track",
+        "Kernel '{0}' is not the tl track consumer for {1}/{2}: {3}",
         Category,
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
-    public static readonly DiagnosticDescriptor TimelineConsumerUnresolved = new(
+    public static readonly DiagnosticDescriptor TimelineKernelUnresolved = new(
         "KRN012",
-        "Timeline consumer could not be resolved",
-        "Kernel '{0}' cannot use timeline '{1}': {2}",
+        "Timeline kernel could not be dispatched",
+        "Timeline kernel '{0}' cannot be dispatched by tl: {1}",
         Category,
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
@@ -114,7 +114,7 @@ internal static class Diagnostics
     public static readonly DiagnosticDescriptor TimelineRuntimeMissing = new(
         "KRN013",
         "tl runtime is not referenced",
-        "Kernel '{0}' declares a TimelineColumn but the tl runtime is not referenced ('Tl.ITrack<,>' is not visible to the compilation); reference Tl.CSharp (or tl.unity) to use timeline columns",
+        "Kernel '{0}' declares a timeline kernel but the tl runtime is not referenced ('Tl.Frame<,>' is not visible to the compilation); reference Tl.Runtime (or Tl.CSharp) 1.3.0 to use timeline kernels",
         Category,
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
@@ -129,8 +129,8 @@ internal static class Diagnostics
         ColumnNeverWritten,
         KernelDiscovered,
         FacadeNameCollision,
-        NotATimelineConsumer,
-        TimelineConsumerUnresolved,
+        NotATimelineTrack,
+        TimelineKernelUnresolved,
         TimelineRuntimeMissing,
     };
 }

@@ -60,12 +60,7 @@ internal static class ReportBackend
             kernel,
             column => $"{(kernel.Columns[column].Access == Access.ReadWrite ? "ref" : "in")} {kernel.Columns[column].Component.Name} {kernel.Columns[column].Name}",
             accumulator => $"ref {kernel.Accumulators[accumulator].Kind} {kernel.Accumulators[accumulator].Name}",
-            uniform => $"in {kernel.Uniforms[uniform].TypeName} {kernel.Uniforms[uniform].Name}",
-            timeline => new[]
-            {
-                $"in TimelineRef {kernel.Timelines[timeline].Name}",
-                $"in TimelineTick {kernel.Timelines[timeline].Name}",
-            });
+            uniform => $"in {kernel.Uniforms[uniform].TypeName} {kernel.Uniforms[uniform].Name}");
 
     private static IEnumerable<string> Messages(KernelModel kernel) =>
         kernel.Diagnostics

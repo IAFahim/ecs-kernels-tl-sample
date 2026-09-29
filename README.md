@@ -1,67 +1,91 @@
-# ecs-kernels × tl — six things and a player
+# ecs-kernels × tl — one struct and a player
 
-256 walkers play one baked [tl](https://github.com/IAFahim/tl) timeline; a kernel moves
-them. [Walk.cs](Walk.cs) is everything you write — the six things; [Program.cs](Program.cs)
-is the ten-line player. A source generator turns your one-line kernel into SIMD lanes and
-wires tl's fold around it, bit-deterministically.
+256 walkers play one baked [tl](https://github.com/IAFahim/tl) timeline; your kernel moves
+them. [Walk.cs](Walk.cs) is everything you write — two components, one clip, and **one
+struct** that is the tl track, the tl consumer and the kernel family at once;
+[Program.cs](Program.cs) is the ten-line player. A source generator turns the struct's
+`Execute<Suffix>` methods into tl's row dispatch and SIMD lanes, bit-deterministically.
 
 ```bash
 dotnet run
 # walker 0 walked to x = 1627.5
 ```
 
-The repo is self-contained: `libs/` vendors the [ecs-kernels](https://github.com/IAFahim/ecs-kernels)
-generator and runtime, plus the 20-line tl bridge. The only external dependencies are
-`Tl.CSharp` (tl 1.3.0, from nuget) and the .NET 10 SDK.
+The repo is self-contained: `libs/` vendors the
+[ecs-kernels](https://github.com/IAFahim/ecs-kernels) generator and runtime. The only
+external dependencies are `Tl.Runtime` (tl 1.3.0, from nuget) and the .NET 10 SDK.
 
 ## What you write — all of it
 
-`Walk.cs`, numbered 1 to 6 (plus `walk.json`):
+`Walk.cs`, numbered 1 to 3 (plus `walk.json`, the authored curves):
 
-1. **tl's side** — a clip, a blending track, and a consumer that folds into the float lane:
-
-```csharp
-public readonly struct WalkConsumer : ITrack<WalkTrack, WalkClip>
-{
-    public static void OnActive(in Frame<WalkTrack, WalkClip> frame, ref float effect)
-        => effect += frame.Direction * frame.Clip.Speed * frame.Track.Scale;
-}
-```
-
-2. **Your components** — one-field structs; `WalkSpeed`'s bits receive the folded float:
+1. **Your components** — one-field partial structs; `WalkSpeed` is written by the timeline
+   fold, `PositionX` is yours alone:
 
 ```csharp
 public partial struct WalkSpeed { public float Value; }
-public partial struct PositionX { public float Value; }
+public partial struct PositionX  { public float Value; }
 ```
 
-3. **The kernel** — plain scalar C#, no attributes, no registration:
+2. **A clip** — one authored stretch:
 
 ```csharp
-public partial struct Walker
+public readonly struct WalkClip
 {
-    public void TickWalk(in TimelineColumn<WalkConsumer, WalkSpeed> walk, ref PositionX x, in float dt)
-    {
-        x.Value += walk.Effect.Value * dt;
-    }
+    public readonly float Speed;
+    public WalkClip(float speed) => Speed = speed;
 }
 ```
 
-That's it. The generator discovers `TickWalk` by convention and emits
-`Walker.TickWalkChunk(timelines, clocks, speeds, positions, dt)`, which runs
+3. **The one struct** — track, consumer, and kernel family combined. The only ceremony the
+   generator asks for over a hand sketch is the `partial` keyword:
 
-**tl `Apply`** (authored clips fold into `WalkSpeed`) **→ the lowered SIMD body** (your math,
-`Vector<T>`-wide) **→ tl `Advance`** (every clock moves one frame),
+```csharp
+public readonly partial struct WalkTrack : IBlend<WalkClip>, ITrack<WalkTrack, WalkClip>
+{
+    public readonly float Scale;
+    public WalkTrack(float scale) => Scale = scale;
 
-in that order, identically on .NET and Unity. Timeline state never crosses the kernel
-boundary — only the effect component does — so there is no clock to reason about inside
-the kernel, 
+    public void Blend(in WalkClip first, in WalkClip second, float factor, out WalkClip result)
+        => result = new WalkClip(first.Speed + (second.Speed - first.Speed) * factor);
+
+    // timeline-driven: any Execute<Suffix> whose first parameter is the Frame — tl
+    // dispatches this per walker per tick, and `+=` accumulates into the column.
+    public static void ExecuteWalk(in Frame<WalkTrack, WalkClip> frame, ref WalkSpeed speed)
+        => speed.Value += frame.Direction * frame.Clip.Speed * frame.Track.Scale;
+
+    // standalone: no Frame — the same family, zero timeline involvement, run as SIMD lanes.
+    public static void ExecuteStep(in WalkSpeed speed, ref PositionX x, in float dt)
+        => x.Value += speed.Value * dt;
+}
+```
+
+No attributes, no registration, no marker types, no separate consumer struct, no
+hand-written binding — the `Frame` first parameter is the whole timeline contract.
+
+## What the generator emits
+
+Two facades, callable exactly as the player calls them:
+
+- `WalkTrackTimeline.ExecuteWalkChunk(ids, clocks, speeds)` — the timeline-driven one. It
+  runs **tl `Apply`** (authored clips fold through your `ExecuteWalk` per walker) **→ tl
+  `Advance`** (every clock moves one frame), in that order, identically on .NET and Unity.
+- `WalkTrack.ExecuteStepChunk(speeds, positions, dt)` — the standalone one, lowered to
+  `Vector<T>`-wide SIMD lanes with the same bits as the scalar body.
+
+It also synthesizes the tl-facing consumer binding (same-typed columns get distinct
+one-field wrapper types, so tl's per-type column binding is never ambiguous) and, on
+Unity, pointer + `NativeArray`/`NativeSlice` facades for Burst. The emitted code is on
+disk after a build — look in `obj/Debug/net10.0/generated/` to read every line.
 
 ## Determinism
 
 The run is a pure function of `(walk.tlb, entity seeds)`: same bits on every machine. The
-main repo's test suite pins this exact scenario (256 walkers, 64 ticks) — receipt
-`0x476ec500` — and fails on any drift in the generator, tl, or the bake.
+main repo's test suite pins this exact scenario (256 staggered walkers, 64 ticks, this
+bake) — digest `0xFFFFFFFEE3030B44`, sumX bits `0x476EC500` — and proves the timeline
+drive and the plain C# body agree on every tick. The `1627.5` line above is the same
+receipt in one number, unchanged from the v3 sample even though the authoring surface
+collapsed from six things to one struct.
 
 ## Re-baking the timeline
 
@@ -75,18 +99,17 @@ tlb walk.json walk.tlb --assembly bin/Debug/net10.0/TimelineWalk.dll
 
 Two tl rules to know: the JSON's namespaces are bare (`Walk`, not `Walk.Something`), and a
 `.tlb` is keyed to the assembly that owns the track/clip types — bake from **this** repo's
-build, and the receipt constant in `Program.cs` will need re-pinning if the curves change.
+build. If the curves change, the numbers above change with them.
 
 ## Layout
 
 ```
-Walk.cs                       the six things you write (the whole game side)
+Walk.cs                       the three things you write (the whole game side)
 Program.cs                    the player: load, park walkers, play, print
 walk.json / walk.tlb          authored timeline + its bake (committed)
 libs/generator/               the ecs-kernels source generator (vendored)
 libs/runtime/                 Kernels runtime: exact accumulators, KernelMath (vendored)
 libs/Kernels/                 netstandard2.1 build of the runtime
-libs/TimelineColumn.cs        the tl bridge (vendored from com.kernels.tl)
 ```
 
 For the rest of the story — z3 proofs that the generated loops equal your scalar code,

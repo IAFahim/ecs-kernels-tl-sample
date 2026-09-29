@@ -23,6 +23,23 @@ internal static class BurstBackend
             }
 
             writer.Close();
+            var timelines = family.TimelineKernels.Where(kernel => kernel.CanEmit).ToList();
+            if (timelines.Count > 0)
+            {
+                writer.Line();
+                writer.Open($"{(family.IsPublic ? "public" : "internal")} static unsafe partial class {timelines[0].PairClass}");
+                foreach (var kernel in timelines)
+                {
+                    TimelineBackend.WriteEnabledFacade(writer, family, kernel);
+                    writer.Line();
+                    TimelineBackend.WriteNativeContainerFacades(writer, family, kernel, "global::Unity.Collections.NativeArray", NativeArrayUnsafeUtility);
+                    writer.Line();
+                    TimelineBackend.WriteNativeContainerFacades(writer, family, kernel, "global::Unity.Collections.NativeSlice", NativeSliceUnsafeUtility);
+                    writer.Line();
+                }
+
+                writer.Close();
+            }
         });
 
     public static string KernelSource(KernelModel kernel)
@@ -52,26 +69,11 @@ internal static class BurstBackend
             kernel,
             column => decorate($"{kernel.Columns[column].Component.FullName}* {names.Column(column)}"),
             accumulator => $"ref {kernel.Accumulators[accumulator].TypeName} {names.Accumulator(accumulator)}",
-            uniform => UniformParameter(kernel, names, uniform),
-            timeline => new[]
-            {
-                decorate($"global::Kernels.Timelines.TimelineRef* {names.Timeline(timeline).Reference}"),
-                decorate($"global::Kernels.Timelines.TimelineTick* {names.Timeline(timeline).Clock}"),
-            });
+            uniform => UniformParameter(kernel, names, uniform));
 
     private static void WritePointerFacade(SourceWriter writer, KernelModel kernel, ParameterNames names, LaneProgram? program, IEnumerable<string> noAliasParameters)
     {
-        writer.Open($"public unsafe void {kernel.Chunk}({string.Join(", ", noAliasParameters.Append("int start").Append("int count"))})");
-        foreach (var timeline in Enumerable.Range(0, kernel.Timelines.Count))
-        {
-            WriteApply(writer, kernel, names, timeline);
-        }
-
-        if (kernel.Timelines.Count > 0)
-        {
-            writer.Line();
-        }
-
+        writer.Open($"public {(kernel.IsStatic ? "static " : string.Empty)}unsafe void {kernel.Chunk}({string.Join(", ", noAliasParameters.Append("int start").Append("int count"))})");
         foreach (var accumulator in Enumerable.Range(0, kernel.Accumulators.Count))
         {
             writer.Line($"var {names.PartialOf(accumulator)} = {names.Accumulator(accumulator)};");
@@ -101,30 +103,8 @@ internal static class BurstBackend
             writer.Line($"{names.Accumulator(accumulator)} = {names.PartialOf(accumulator)};");
         }
 
-        if (kernel.Timelines.Count > 0)
-        {
-            writer.Line();
-        }
-
-        foreach (var timeline in Enumerable.Range(0, kernel.Timelines.Count))
-        {
-            WriteAdvance(writer, kernel, names, timeline);
-        }
-
         writer.Close();
     }
-
-    private static void WriteApply(SourceWriter writer, KernelModel kernel, ParameterNames names, int timeline) =>
-        writer.Line($"global::Tl.Timeline<{kernel.Timelines[timeline].Pair}>.Apply<{kernel.Timelines[timeline].RuntimeTypes}>(" +
-            $"new global::System.ReadOnlySpan<global::Kernels.Timelines.TimelineRef>({names.Timeline(timeline).Reference} + start, count), " +
-            $"new global::System.ReadOnlySpan<global::Kernels.Timelines.TimelineTick>({names.Timeline(timeline).Clock} + start, count), " +
-            $"true, " +
-            $"new global::System.Span<{kernel.Timelines[timeline].Effect}>({names.Column(kernel.Timelines[timeline].EffectColumn)} + start, count));");
-
-    private static void WriteAdvance(SourceWriter writer, KernelModel kernel, ParameterNames names, int timeline) =>
-        writer.Line($"global::Tl.Timeline<{kernel.Timelines[timeline].Pair}>.Advance<{kernel.Timelines[timeline].ClockTypes}>(" +
-            $"new global::System.ReadOnlySpan<global::Kernels.Timelines.TimelineRef>({names.Timeline(timeline).Reference} + start, count), " +
-            $"new global::System.Span<global::Kernels.Timelines.TimelineTick>({names.Timeline(timeline).Clock} + start, count), true);");
 
     private static void WriteEnabledFacade(SourceWriter writer, KernelModel kernel, ParameterNames names, IEnumerable<string> parameters)
     {
@@ -132,9 +112,8 @@ internal static class BurstBackend
             kernel,
             index => names.Column(index),
             accumulator => "ref " + names.Accumulator(accumulator),
-            uniform => "in " + names.Uniform(uniform),
-            timeline => new[] { names.Timeline(timeline).Reference, names.Timeline(timeline).Clock });
-        writer.Open($"public unsafe void {kernel.EnabledChunk}({string.Join(", ", parameters.Append("ulong enabled").Append("int offset"))})");
+            uniform => "in " + names.Uniform(uniform));
+        writer.Open($"public {(kernel.IsStatic ? "static " : string.Empty)}unsafe void {kernel.EnabledChunk}({string.Join(", ", parameters.Append("ulong enabled").Append("int offset"))})");
         writer.Open("while (enabled != 0UL)");
         writer.Line($"var begin = {Mathematics}.tzcnt(enabled);");
         writer.Line($"var length = {Mathematics}.tzcnt(~(enabled >> begin));");
@@ -151,23 +130,13 @@ internal static class BurstBackend
             kernel,
             column => $"in {container}<{kernel.Columns[column].Component.FullName}> {names.Column(column)}",
             accumulator => $"ref {kernel.Accumulators[accumulator].TypeName} {names.Accumulator(accumulator)}",
-            uniform => UniformParameter(kernel, names, uniform),
-            timeline => new[]
-            {
-                $"in {container}<global::Kernels.Timelines.TimelineRef> {names.Timeline(timeline).Reference}",
-                $"in {container}<global::Kernels.Timelines.TimelineTick> {names.Timeline(timeline).Clock}",
-            });
+            uniform => UniformParameter(kernel, names, uniform));
         var forwarded = ParameterNames.InExecuteOrder(
             kernel,
             column => $"({kernel.Columns[column].Component.FullName}*){unsafeUtility}.GetUnsafePtr({names.Column(column)})",
             accumulator => "ref " + names.Accumulator(accumulator),
-            uniform => "in " + names.Uniform(uniform),
-            timeline => new[]
-            {
-                $"(global::Kernels.Timelines.TimelineRef*){unsafeUtility}.GetUnsafePtr({names.Timeline(timeline).Reference})",
-                $"(global::Kernels.Timelines.TimelineTick*){unsafeUtility}.GetUnsafePtr({names.Timeline(timeline).Clock})",
-            });
-        writer.Open($"public unsafe void {kernel.Chunk}({string.Join(", ", parameters)})");
+            uniform => "in " + names.Uniform(uniform));
+        writer.Open($"public {(kernel.IsStatic ? "static " : string.Empty)}unsafe void {kernel.Chunk}({string.Join(", ", parameters)})");
         writer.Line($"{kernel.Chunk}({string.Join(", ", forwarded.Append("0").Append(first + ".Length"))});");
         writer.Close();
     }
@@ -179,21 +148,13 @@ internal static class BurstBackend
     {
         var arguments = ParameterNames.InExecuteOrder(
             kernel,
-            column => TimelineArgument(kernel, names, column) is { } wrapped
-                ? wrapped
-                : $"{(kernel.Columns[column].Access == Access.ReadWrite ? "ref" : "in")} {names.Column(column)}[index]",
+            column => $"{(kernel.Columns[column].Access == Access.ReadWrite ? "ref" : "in")} {names.Column(column)}[index]",
             accumulator => "ref " + names.PartialOf(accumulator),
             uniform => "in " + names.Uniform(uniform));
         writer.Line("var end = start + count;");
         writer.Open("for (var index = start; index < end; index++)");
         writer.Line($"{kernel.Method}({string.Join(", ", arguments)});");
         writer.Close();
-    }
-
-    private static string? TimelineArgument(KernelModel kernel, ParameterNames names, int column)
-    {
-        var timeline = kernel.Timelines.FirstOrDefault(candidate => candidate.EffectColumn == column);
-        return timeline is null ? null : $"new global::Kernels.Timelines.TimelineColumn<{timeline.Consumer}, {timeline.Effect}>(in {names.Column(column)}[index])";
     }
 
     private static void WriteLaneLoop(SourceWriter writer, ParameterNames names, LaneProgram program)

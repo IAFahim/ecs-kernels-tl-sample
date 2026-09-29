@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -23,17 +24,26 @@ public sealed class KernelGenerator : IIncrementalGenerator
 
         var backends = context.CompilationProvider.Select(static (compilation, _) => Backends.Detect(compilation));
         var generation = context.AnalyzerConfigOptionsProvider.Select(static (options, _) => options.GlobalOptions.GenerateKernels());
-        var everyFamily = families.Collect().Combine(backends).Combine(generation);
+        // A partial family is visited once per declaring part; the family is read whole from
+        // the symbol each time, so keep one model per full name.
+        var everyFamily = families.Collect().Select(static (all, _) => Distinct(all)).Combine(backends).Combine(generation).Combine(context.CompilationProvider);
 
-        context.RegisterSourceOutput(families.Combine(backends).Combine(generation), static (output, pair) => EmitFamily(output, pair.Left.Left, pair.Left.Right, pair.Right));
         context.RegisterSourceOutput(
-            everyFamily.Combine(context.CompilationProvider),
+            everyFamily,
             static (output, pair) =>
             {
+                foreach (var family in pair.Left.Left.Left)
+                {
+                    EmitFamily(output, family, pair.Left.Left.Right, pair.Left.Right);
+                }
+
                 EmitComponents(output, pair.Left.Left.Left, pair.Left.Left.Right, pair.Left.Right);
                 Report(output, pair.Left.Left.Left, pair.Left.Left.Right, pair.Left.Right, pair.Right);
             });
     }
+
+    private static ImmutableArray<FamilyModel> Distinct(ImmutableArray<FamilyModel> families) =>
+        families.GroupBy(family => family.FullName, StringComparer.Ordinal).Select(group => group.First()).ToImmutableArray();
 
     private static void EmitFamily(SourceProductionContext output, FamilyModel family, Backends backends, bool generate)
     {
@@ -43,6 +53,11 @@ public sealed class KernelGenerator : IIncrementalGenerator
         }
 
         var hint = HintName(family.FullName);
+        if (family.TimelineKernels.Any(kernel => kernel.CanEmit))
+        {
+            output.AddSource(hint + ".Timeline.g.cs", TimelineBackend.EmitConsumer(family));
+        }
+
         if (backends.DotNet)
         {
             output.AddSource(hint + ".DotNet.g.cs", DotNetBackend.Emit(family, backends));
@@ -98,18 +113,30 @@ public sealed class KernelGenerator : IIncrementalGenerator
                 Diagnostics.KernelDiscovered,
                 kernel.Location,
                 kernel.FamilyMethod,
-                family.Name + "." + kernel.Chunk + TimelineSuffix(kernel))));
-        var problems = families.SelectMany(family => family.Diagnostics.Concat(family.Kernels.SelectMany(kernel => kernel.Diagnostics)));
-        foreach (var diagnostic in problems.Concat(scalarOnDotNet).Concat(notPartial).Concat(discovered))
+                family.Name + "." + kernel.Chunk))
+                .Concat(family.TimelineKernels.Where(kernel => kernel.CanEmit).Select(kernel => DiagnosticInfo.Of(
+                    Diagnostics.KernelDiscovered,
+                    kernel.Location,
+                    family.Name + "." + kernel.Method,
+                    kernel.PairClass + "." + kernel.Chunk + $" (timeline {kernel.TrackName}/{kernel.ClipName})"))));
+        // One Apply per pair drives every consumer registered on it, so a (track, clip) pair
+        // hosts exactly one timeline kernel across the compilation.
+        var pairConflicts = families
+            .SelectMany(family => family.TimelineKernels.Where(kernel => kernel.CanEmit).Select(kernel => (family, kernel)))
+            .GroupBy(pair => pair.kernel.Pair, StringComparer.Ordinal)
+            .Where(group => group.Count() > 1)
+            .SelectMany(group => group.Skip(1).Select(pair => DiagnosticInfo.Of(
+                Diagnostics.TimelineKernelUnresolved,
+                pair.kernel.Location,
+                pair.family.Name + "." + pair.kernel.Method,
+                $"'{group.First().kernel.TrackName}/{group.First().kernel.ClipName}' is already dispatched by '{group.First().family.Name}.{group.First().kernel.Method}'; one Apply per pair drives every consumer it registered, so a pair hosts one timeline kernel (a second kernel reads the folded columns as a plain standalone kernel)")));
+        var problems = families.SelectMany(family => family.Diagnostics
+            .Concat(family.Kernels.SelectMany(kernel => kernel.Diagnostics))
+            .Concat(family.TimelineKernels.SelectMany(kernel => kernel.Diagnostics)));
+        foreach (var diagnostic in problems.Concat(pairConflicts).Concat(scalarOnDotNet).Concat(notPartial).Concat(discovered))
         {
             output.ReportDiagnostic(diagnostic.ToDiagnostic(compilation));
         }
-    }
-
-    private static string TimelineSuffix(KernelModel kernel)
-    {
-        var first = kernel.Timelines.FirstOrDefault();
-        return first is null ? string.Empty : $" (timeline {first.TrackName}/{first.ClipName})";
     }
 
     private static IEnumerable<(Component Component, SourceLocation? FamilyLocation)> UnityComponents(ImmutableArray<FamilyModel> families, Backends backends) =>
@@ -117,7 +144,6 @@ public sealed class KernelGenerator : IIncrementalGenerator
             ? families
                 .SelectMany(family => family.Kernels.Where(kernel => kernel.CanEmit)
                     .SelectMany(kernel => kernel.Columns.Select(column => column.Component)
-                        .Concat(kernel.Timelines.SelectMany(timeline => new[] { timeline.Ref, timeline.Tick }))
                         .Select(component => (component, FamilyLocation: family.Location))))
                 .Where(pair => !pair.component.DeclaresUnityComponent)
                 .GroupBy(pair => pair.component.FullName)
